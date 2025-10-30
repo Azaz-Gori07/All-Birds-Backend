@@ -3,6 +3,7 @@ import express from "express";
 import db from "../config/db.js";
 const router = express.Router();
 import bcrypt from "bcryptjs";
+import { verifyUser } from "../middleware/authMiddleware.js";
 
 router.get("/", (req, res) => {
   db.query("SELECT id, name, email, role, created_at FROM users", (err, results) => {
@@ -12,12 +13,68 @@ router.get("/", (req, res) => {
 });
 
 
+router.get("/:id", (req, res) => {
+  db.query("SELECT id, name, email, role, created_at FROM users WHERE id=?", [req.params.id], (err, results) => {
+    if (err) return res.status(500).json({ error: "Database error" });
+    if (results.length === 0) return res.status(404).json({ error: "User not found" });
+    res.json(results[0]);
+  });
+});
+
+
+
+router.put("/:id/password", verifyUser, async (req, res) => {
+  const userId = req.params.id;
+  const { currentPassword, newPassword } = req.body;
+
+  // ✅ Token se verify karo ki user apna hi password change kar raha hai
+  if (req.user.id !== parseInt(userId)) {
+    return res.status(403).json({ message: "Unauthorized: cannot change another user's password" });
+  }
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ message: "Current and new password required" });
+  }
+
+  try {
+    // 🧠 Get current user from DB
+    const [rows] = await db.promise().query("SELECT password FROM users WHERE id = ?", [userId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const user = rows[0];
+
+    // 🔐 Compare current password
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Current password is incorrect" });
+    }
+
+    // 🔑 Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // 🧱 Update DB
+    await db.promise().query("UPDATE users SET password = ? WHERE id = ?", [hashedPassword, userId]);
+
+    res.json({ success: true, message: "Password changed successfully" });
+  } catch (err) {
+    console.error("Error changing password:", err);
+    res.status(500).json({ message: "Server error while changing password" });
+  }
+});
+
+
+
 router.post("/", async (req, res) => {
   const { name, email, password, role } = req.body;
 
   if (!name || !email || !password || !role) {
     return res.status(400).json({ message: "All fields are required" });
+  } if (Number(req.user.id) !== Number(userId)) {
+    return res.status(403).json({ message: "Unauthorized: cannot change another user's password" });
   }
+
 
   try {
     const hashedPassword = await bcrypt.hash(password, 8);
@@ -33,7 +90,8 @@ router.post("/", async (req, res) => {
       email,
       role,
     });
-  } catch (err) {
+  }
+  catch (err) {
     console.error("❌ Database error:", err.message);
     return res.status(500).json({ message: "Database error", error: err.message });
   }

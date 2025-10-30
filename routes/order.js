@@ -1,13 +1,10 @@
 import express from "express";
 import db from "../config/db.js";
-import { verifyUser }  from "../middleware/authMiddleware.js";
+import { verifyUser } from "../middleware/authMiddleware.js";
+import { getUserOrders } from "../controllers/ordersControlles.js";
 
 const router = express.Router();
-
-
-router.post("/verify", verifyUser, (req, res) => {
-  res.json({ message: "Token is valid", user: req.user });
-});
+router.get("/user/:userId", getUserOrders);
 
 router.get("/", (req, res) => {
   db.query(
@@ -56,7 +53,6 @@ router.get("/recent", async (req, res) => {
 
 
 
-// Get single order by ID
 router.get("/:id", (req, res) => {
   const orderId = req.params.id;
 
@@ -121,10 +117,11 @@ router.put("/:id/status", (req, res) => {
 });
 
 // ✅ Place new order
-router.post("/", (req, res) => {
-  const { user_id, items, total, shipping, payment } = req.body;
+router.post("/", verifyUser, (req, res) => {
+  const userId = req.user.id; // 👈 token se logged-in user id
+  const { items, total, shipping, payment } = req.body;
 
-  if (!user_id || !items || !total || !shipping) {
+  if (!items || !total || !shipping || !payment) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
@@ -137,24 +134,22 @@ router.post("/", (req, res) => {
   db.query(
     query,
     [
-      user_id,
-      JSON.stringify(items), // 👈 cart items JSON me save honge
+      userId,                   // ✅ token-based id
+      JSON.stringify(items),
       total,
       shipping.name,
       shipping.address,
       shipping.city,
       shipping.pincode,
       shipping.phone,
-      payment,
+      payment
     ],
     (err, result) => {
-      if (err) {
-        console.error("Order Insert Error:", err);
-        return res.status(500).json({ message: "Failed to place order" });
-      }
+      if (err) return res.status(500).json({ message: "Failed to place order" });
       res.json({ success: true, orderId: result.insertId });
     }
   );
 });
+
 
 export default router;
