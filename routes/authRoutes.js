@@ -101,9 +101,9 @@ router.post("/forgot-password", async (req, res) => {
     const RESET_LINK = `https://allbirdsweb.com/reset-password?email=${encodeURIComponent(email)}`;
 
     await sendEmail(
-  email,
-  "Password Reset Request",
-  `Hello,
+      email,
+      "Password Reset Request",
+      `Hello,
 
    We received a request to reset the password for your ${APP_NAME} account.
 
@@ -120,18 +120,18 @@ router.post("/forgot-password", async (req, res) => {
 
    Regards,
    ${APP_NAME} Security Team`
-);
+    );
 
-console.log(`✅ OTP sent to ${email}: ${otp}`);
+    console.log(`✅ OTP sent to ${email}: ${otp}`);
 
-// expire after 5 min
-setTimeout(() => delete otpStore[email], 5 * 60 * 1000);
+    // expire after 5 min
+    setTimeout(() => delete otpStore[email], 5 * 60 * 1000);
 
-res.json({ success: true, message: "OTP sent successfully" });
+    res.json({ success: true, message: "OTP sent successfully" });
   } catch (err) {
-  console.error("Error sending OTP:", err);
-  res.status(500).json({ message: "Error sending OTP" });
-}
+    console.error("Error sending OTP:", err);
+    res.status(500).json({ message: "Error sending OTP" });
+  }
 });
 
 // ✅ 2️⃣ Verify OTP
@@ -173,6 +173,52 @@ router.post("/reset-password", async (req, res) => {
     console.error("Reset password error:", err);
     res.status(500).json({ message: "Server error" });
   }
+});
+
+
+
+app.post('/api/auth/send-signup-otp', async (req, res) => {
+  const { email } = req.body;
+
+  const existingUser = await User.findOne({ email });
+  if (existingUser) {
+    return res.status(400).json({ error: "Email already registered" });
+  }
+
+  const otp = generateOTP();
+  await sendOTPEmail(email, otp);
+
+  await storeOTP(email, otp, '10m'); 
+
+  res.json({ message: "OTP sent to your email" });
+});
+
+
+app.post('/api/auth/verify-and-signup', async (req, res) => {
+  const { email, otp, name, password } = req.body;
+
+  const storedOTP = await getStoredOTP(email);
+  if (!storedOTP || storedOTP !== otp) {
+    return res.status(400).json({ error: "Invalid or expired OTP" });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const user = await User.create({ name, email, password: hashedPassword });
+
+  await deleteOTP(email);
+
+  res.json({ message: "Account created successfully" });
+});
+
+
+app.post('/api/auth/resend-otp', async (req, res) => {
+  const { email } = req.body;
+  
+  const otp = generateOTP();
+  await sendOTPEmail(email, otp);
+  await storeOTP(email, otp, '10m');
+  
+  res.json({ message: "OTP resent" });
 });
 
 export default router;
