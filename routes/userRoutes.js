@@ -66,17 +66,28 @@ router.put("/:id/password", verifyUser, async (req, res) => {
 
 
 
-router.post("/", async (req, res) => {
+router.post("/create", verifyUser, async (req, res) => {
   const { name, email, password, role } = req.body;
+
+  // 🔒 Only superadmin can create users
+  if (req.user.role !== "superadmin") {
+    return res.status(403).json({ message: "Access denied: only superadmins can create users" });
+  }
 
   if (!name || !email || !password || !role) {
     return res.status(400).json({ message: "All fields are required" });
-  } if (Number(req.user.id) !== Number(userId)) {
-    return res.status(403).json({ message: "Unauthorized: cannot change another user's password" });
   }
 
-
   try {
+    // Check if email already exists
+    const [existing] = await db.promise().query(
+      "SELECT id FROM users WHERE email = ?",
+      [email]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ message: "Email already exists" });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 8);
 
     const [result] = await db.promise().query(
@@ -84,18 +95,18 @@ router.post("/", async (req, res) => {
       [name, email, hashedPassword, role]
     );
 
-    return res.status(201).json({
+    res.status(201).json({
       id: result.insertId,
       name,
       email,
       role,
     });
-  }
-  catch (err) {
+  } catch (err) {
     console.error("❌ Database error:", err.message);
-    return res.status(500).json({ message: "Database error", error: err.message });
+    res.status(500).json({ message: "Database error", error: err.message });
   }
 });
+
 
 
 
