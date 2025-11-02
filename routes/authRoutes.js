@@ -7,6 +7,156 @@ import { sendEmail } from "../utils/sendEmail.js";
 
 const router = express.Router();
 
+let otpStore = {};
+
+const generateOTP = () => Math.floor(100000 + Math.random() * 900000);
+
+const sendOTPEmail = async (email, otp, type = "signup") => {
+  const SUPPORT_EMAIL = "support@allbirdsweb.com";
+  const APP_NAME = "AllBirdsWeb";
+
+  const subject = type === "signup" ? "Verify Your Email" : "Password Reset Request";
+  const message = type === "signup"
+    ? `Hello,
+
+Thank you for signing up with ${APP_NAME}!
+
+Your verification OTP: ${otp}
+
+This OTP is valid for 10 minutes.
+
+For your security:
+- Do NOT share this OTP with anyone.
+- If you did not sign up, please ignore this email or contact us at ${SUPPORT_EMAIL}.
+
+Regards,
+${APP_NAME} Team`
+    : `Hello,
+
+We received a request to reset the password for your ${APP_NAME} account.
+
+Your OTP: ${otp}
+
+This OTP is valid for 5 minutes.
+
+For your security:
+- Do NOT share this OTP with anyone.
+- If you did not request a password reset, please change your password immediately or contact our support team at ${SUPPORT_EMAIL}.
+
+Regards,
+${APP_NAME} Security Team`;
+
+  await sendEmail(email, subject, message);
+};
+
+router.post("/send-signup-otp", async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  try {
+    const [existing] = await db.promise().query("SELECT * FROM users WHERE email = ?", [email]);
+    if (existing.length > 0) {
+      return res.status(400).json({ error: "Email already registered" });
+    }
+
+    const otp = generateOTP();
+    otpStore[email] = {
+      otp,
+      createdAt: Date.now(),
+      type: 'signup'
+    };
+
+    await sendOTPEmail(email, otp, 'signup');
+
+    setTimeout(() => delete otpStore[email], 10 * 60 * 1000);
+
+    res.json({ success: true, message: "OTP sent to your email" });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to send OTP" });
+  }
+});
+
+router.post("/verify-and-signup", async (req, res) => {
+  const { email, otp, name, password } = req.body;
+
+  if (!email || !otp || !name || !password) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+
+  try {
+    if (!otpStore[email]) {
+      return res.status(400).json({ error: "OTP not found or expired" });
+    }
+
+    const storedOTP = otpStore[email];
+
+    const isExpired = Date.now() - storedOTP.createdAt > 10 * 60 * 1000;
+    if (isExpired) {
+      delete otpStore[email];
+      return res.status(400).json({ error: "OTP expired. Please request a new one" });
+    }
+
+    if (storedOTP.otp != otp) {
+      return res.status(400).json({ error: "Invalid OTP" });
+    }
+
+    const [existing] = await db.promise().query("SELECT * FROM users WHERE email = ?", [email]);
+    if (existing.length > 0) {
+      delete otpStore[email];
+      return res.status(400).json({ error: "Email already registered" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await db
+      .promise()
+      .query("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)", [
+        name,
+        email,
+        hashedPassword,
+        "user",
+      ]);
+
+    delete otpStore[email];
+
+    res.status(201).json({ success: true, message: "Account created successfully" });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+router.post("/resend-otp", async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  try {
+    if (!otpStore[email]) {
+      return res.status(400).json({ error: "No OTP request found. Please start signup again" });
+    }
+
+    const otpType = otpStore[email].type || 'signup';
+
+    const otp = generateOTP();
+    otpStore[email] = {
+      otp,
+      createdAt: Date.now(),
+      type: otpType
+    };
+
+    await sendOTPEmail(email, otp, otpType);
+
+    setTimeout(() => delete otpStore[email], 10 * 60 * 1000);
+
+    res.json({ success: true, message: "OTP resent successfully" });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to resend OTP" });
+  }
+});
 
 router.post("/signup", async (req, res) => {
   const { name, email, password, role } = req.body;
@@ -33,11 +183,9 @@ router.post("/signup", async (req, res) => {
 
     res.status(201).json({ message: "User registered successfully" });
   } catch (err) {
-    console.error("Signup error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
-
 
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
@@ -62,8 +210,7 @@ router.post("/login", async (req, res) => {
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
     });
   } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ error: "Server error ////" });
+    res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -71,20 +218,14 @@ router.get("/profile", authenticateToken, (req, res) => {
   res.json({ message: "Welcome", user: req.user });
 });
 
-
 router.get("/admin", authenticateToken, authorizeRoles("admin", "superadmin"), (req, res) => {
   res.json({ message: "Welcome Admin", user: req.user });
 });
-
 
 router.get("/superadmin", authenticateToken, authorizeRoles("superadmin"), (req, res) => {
   res.json({ message: "Welcome Super Admin", user: req.user });
 });
 
-
-let otpStore = {};
-
-// ✅ 1️⃣ Send OTP
 router.post("/forgot-password", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: "Email required" });
@@ -93,48 +234,23 @@ router.post("/forgot-password", async (req, res) => {
     const [rows] = await db.promise().query("SELECT * FROM users WHERE email = ?", [email]);
     if (rows.length === 0) return res.status(404).json({ message: "User not found" });
 
-    const otp = Math.floor(100000 + Math.random() * 900000); // 6-digit OTP
-    otpStore[email] = { otp, createdAt: Date.now() };
+    const otp = generateOTP();
+    otpStore[email] = {
+      otp,
+      createdAt: Date.now(),
+      type: 'forgot-password'
+    };
 
-    const SUPPORT_EMAIL = "support@allbirdsweb.com";
-    const APP_NAME = "AllBirdsWeb";
-    const RESET_LINK = `https://allbirdsweb.com/reset-password?email=${encodeURIComponent(email)}`;
+    await sendOTPEmail(email, otp, 'forgot-password');
 
-    await sendEmail(
-  email,
-  "Password Reset Request",
-  `Hello,
+    setTimeout(() => delete otpStore[email], 5 * 60 * 1000);
 
-   We received a request to reset the password for your ${APP_NAME} account.
-
-   Your OTP: ${otp}
-
-   This OTP is valid for 5 minutes.
-
-   For your security:
-   - Do NOT share this OTP with anyone.
-   - If you did not request a password reset, please change your password immediately or contact our support team at ${SUPPORT_EMAIL}.
-
-   You can continue using the link below:
-   ${RESET_LINK}
-
-   Regards,
-   ${APP_NAME} Security Team`
-);
-
-console.log(`✅ OTP sent to ${email}: ${otp}`);
-
-// expire after 5 min
-setTimeout(() => delete otpStore[email], 5 * 60 * 1000);
-
-res.json({ success: true, message: "OTP sent successfully" });
+    res.json({ success: true, message: "OTP sent successfully" });
   } catch (err) {
-  console.error("Error sending OTP:", err);
-  res.status(500).json({ message: "Error sending OTP" });
-}
+    res.status(500).json({ message: "Error sending OTP" });
+  }
 });
 
-// ✅ 2️⃣ Verify OTP
 router.post("/verify-otp", (req, res) => {
   const { email, otp } = req.body;
 
@@ -155,7 +271,6 @@ router.post("/verify-otp", (req, res) => {
   }
 });
 
-// ✅ 3️⃣ Reset Password
 router.post("/reset-password", async (req, res) => {
   const { email, otp, newPassword } = req.body;
 
@@ -170,12 +285,8 @@ router.post("/reset-password", async (req, res) => {
     delete otpStore[email];
     res.json({ success: true, message: "Password reset successfully" });
   } catch (err) {
-    console.error("Reset password error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
-
-
-
 
 export default router;
