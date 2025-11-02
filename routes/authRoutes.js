@@ -3,11 +3,11 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import db from "../config/db.js";
 import { authenticateToken, authorizeRoles } from "../middleware/authMiddleware.js";
-import { sendEmail } from "../utils/sendEmail.js"; // 👈 utility for sending emails
+import { sendEmail } from "../utils/sendEmail.js";
 
 const router = express.Router();
 
-// ===================== SIGNUP =====================
+
 router.post("/signup", async (req, res) => {
   const { name, email, password, role } = req.body;
 
@@ -38,7 +38,7 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-// ===================== LOGIN =====================
+
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
@@ -67,24 +67,21 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// ===================== PROFILE (Any Logged User) =====================
 router.get("/profile", authenticateToken, (req, res) => {
   res.json({ message: "Welcome", user: req.user });
 });
 
-// ===================== ADMIN ONLY =====================
+
 router.get("/admin", authenticateToken, authorizeRoles("admin", "superadmin"), (req, res) => {
   res.json({ message: "Welcome Admin", user: req.user });
 });
 
-// ===================== SUPERADMIN ONLY =====================
+
 router.get("/superadmin", authenticateToken, authorizeRoles("superadmin"), (req, res) => {
   res.json({ message: "Welcome Super Admin", user: req.user });
 });
 
-// ===================== FORGOT PASSWORD SYSTEM =====================
 
-// temporary store for OTPs (⚠️ reset after server restart)
 let otpStore = {};
 
 // ✅ 1️⃣ Send OTP
@@ -99,22 +96,42 @@ router.post("/forgot-password", async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000); // 6-digit OTP
     otpStore[email] = { otp, createdAt: Date.now() };
 
+    const SUPPORT_EMAIL = "support@allbirdsweb.com";
+    const APP_NAME = "AllBirdsWeb";
+    const RESET_LINK = `https://allbirdsweb.com/reset-password?email=${encodeURIComponent(email)}`;
+
     await sendEmail(
-      email,
-      "Password Reset OTP",
-      `Your OTP is ${otp}. It will expire in 5 minutes.`
-    );
+  email,
+  "Password Reset Request",
+  `Hello,
 
-    console.log(`✅ OTP sent to ${email}: ${otp}`);
+   We received a request to reset the password for your ${APP_NAME} account.
 
-    // expire after 5 min
-    setTimeout(() => delete otpStore[email], 5 * 60 * 1000);
+   Your OTP: ${otp}
 
-    res.json({ success: true, message: "OTP sent successfully" });
+   This OTP is valid for 5 minutes.
+
+   For your security:
+   - Do NOT share this OTP with anyone.
+   - If you did not request a password reset, please change your password immediately or contact our support team at ${SUPPORT_EMAIL}.
+
+   You can continue using the link below:
+   ${RESET_LINK}
+
+   Regards,
+   ${APP_NAME} Security Team`
+);
+
+console.log(`✅ OTP sent to ${email}: ${otp}`);
+
+// expire after 5 min
+setTimeout(() => delete otpStore[email], 5 * 60 * 1000);
+
+res.json({ success: true, message: "OTP sent successfully" });
   } catch (err) {
-    console.error("Error sending OTP:", err);
-    res.status(500).json({ message: "Error sending OTP" });
-  }
+  console.error("Error sending OTP:", err);
+  res.status(500).json({ message: "Error sending OTP" });
+}
 });
 
 // ✅ 2️⃣ Verify OTP
