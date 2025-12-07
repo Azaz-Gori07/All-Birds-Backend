@@ -1,18 +1,35 @@
-import db from "../config/db.js";
+import { getDB } from "../config/db.js";
 
+// GET ALL PRODUCTS (same behavior: only first product)
+export const getProducts = async (req, res) => {
+  try {
+    const db = getDB();
 
-export const getProducts = ( req , res) => {
-    db.query("SELECT * FROM products", (err, result) => {
-        if (err) throw err;
-        res.json(result[0] || {});
-    });
+    const product = await db
+      .collection("products")
+      .findOne({});
+
+    res.json(product || {});
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Database error" });
+  }
 };
 
+// GET PRODUCT BY ID
+export const getProductsById = async (req, res) => {
+  const { id } = req.params;
 
-export const getProductsById = (req, res) => {
-    const { id } = req.params;
-    db.query("SELECT * FROM products WHERE id = ? " , [id], (err, result) => {
-        if (err) throw err;
-        res.json(result[0] || {});
-    });
+  try {
+    const db = getDB();
+
+    const product = await db
+      .collection("products")
+      .findOne({ id: Number(id) });
+
+    res.json(product || {});
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Database error" });
+  }
 };

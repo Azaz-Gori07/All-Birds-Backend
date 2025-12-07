@@ -1,34 +1,43 @@
-// routes/userRoutes.js
 import express from "express";
-import db from "../config/db.js";
-const router = express.Router();
+import { getDB } from "../config/db.js";
 import bcrypt from "bcryptjs";
 import { verifyUser } from "../middleware/authMiddleware.js";
 
-router.get("/", (req, res) => {
-  db.query("SELECT id, name, email, role, created_at FROM users", (err, results) => {
-    if (err) return res.status(500).json({ error: "Database error" });
-    res.json(results);
-  });
+const router = express.Router();
+
+router.get("/", async (req, res) => {
+  try {
+    const db = getDB();
+    const users = await db
+      .collection("users")
+      .find({}, { projection: { password: 0 } })
+      .toArray();
+    res.json(users);
+  } catch {
+    res.status(500).json({ error: "Database error" });
+  }
 });
 
+router.get("/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    const db = getDB();
+    const user = await db
+      .collection("users")
+      .findOne({ id }, { projection: { password: 0 } });
 
-router.get("/:id", (req, res) => {
-  db.query("SELECT id, name, email, role, created_at FROM users WHERE id=?", [req.params.id], (err, results) => {
-    if (err) return res.status(500).json({ error: "Database error" });
-    if (results.length === 0) return res.status(404).json({ error: "User not found" });
-    res.json(results[0]);
-  });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json(user);
+  } catch {
+    res.status(500).json({ error: "Database error" });
+  }
 });
-
-
 
 router.put("/:id/password", verifyUser, async (req, res) => {
-  const userId = req.params.id;
+  const userId = Number(req.params.id);
   const { currentPassword, newPassword } = req.body;
 
-  // ✅ Token se verify karo ki user apna hi password change kar raha hai
-  if (req.user.id !== parseInt(userId)) {
+  if (req.user.id !== userId) {
     return res.status(403).json({ message: "Unauthorized: cannot change another user's password" });
   }
 
@@ -37,39 +46,32 @@ router.put("/:id/password", verifyUser, async (req, res) => {
   }
 
   try {
-    // 🧠 Get current user from DB
-    const [rows] = await db.promise().query("SELECT password FROM users WHERE id = ?", [userId]);
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    const db = getDB();
+    const user = await db.collection("users").findOne({ id: userId });
 
-    const user = rows[0];
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-    // 🔐 Compare current password
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
       return res.status(401).json({ message: "Current password is incorrect" });
     }
 
-    // 🔑 Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    // 🧱 Update DB
-    await db.promise().query("UPDATE users SET password = ? WHERE id = ?", [hashedPassword, userId]);
+    await db.collection("users").updateOne(
+      { id: userId },
+      { $set: { password: hashedPassword } }
+    );
 
     res.json({ success: true, message: "Password changed successfully" });
-  } catch (err) {
-    console.error("Error changing password:", err);
+  } catch {
     res.status(500).json({ message: "Server error while changing password" });
   }
 });
 
-
-
 router.post("/create", verifyUser, async (req, res) => {
   const { name, email, password, role } = req.body;
 
-  // 🔒 Only superadmin can create users
   if (req.user.role !== "superadmin") {
     return res.status(403).json({ message: "Access denied: only superadmins can create users" });
   }
@@ -79,62 +81,68 @@ router.post("/create", verifyUser, async (req, res) => {
   }
 
   try {
-    // Check if email already exists
-    const [existing] = await db.promise().query(
-      "SELECT id FROM users WHERE email = ?",
-      [email]
-    );
-    if (existing.length > 0) {
+    const db = getDB();
+    const existing = await db.collection("users").findOne({ email });
+    if (existing) {
       return res.status(400).json({ message: "Email already exists" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 8);
 
-    const [result] = await db.promise().query(
-      "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
-      [name, email, hashedPassword, role]
-    );
+    const lastUser = await db
+      .collection("users")
+      .find()
+      .sort({ id: -1 })
+      .limit(1)
+      .toArray();
 
-    res.status(201).json({
-      id: result.insertId,
+    const newId = lastUser.length ? lastUser[0].id + 1 : 1;
+
+    await db.collection("users").insertOne({
+      id: newId,
       name,
       email,
+      password: hashedPassword,
       role,
+      created_at: new Date()
     });
+
+    res.status(201).json({ id: newId, name, email, role });
   } catch (err) {
-    console.error("❌ Database error:", err.message);
     res.status(500).json({ message: "Database error", error: err.message });
   }
 });
 
-
-
-
-// Update user
-router.put("/:id", (req, res) => {
+router.put("/:id", async (req, res) => {
   const { name, email, role } = req.body;
-  db.query(
-    "UPDATE users SET name=?, email=?, role=? WHERE id=?",
-    [name, email, role, req.params.id],
-    (err) => {
-      if (err) return res.status(500).json({ error: "Database error" });
-      db.query("SELECT id,name,email,role FROM users WHERE id=?",
-        [req.params.id],
-        (err2, rows) => {
-          if (err2) return res.status(500).json({ error: "Database error" });
-          res.json(rows[0]);
-        }
-      );
-    }
-  );
+  const id = Number(req.params.id);
+
+  try {
+    const db = getDB();
+    await db.collection("users").updateOne(
+      { id },
+      { $set: { name, email, role } }
+    );
+
+    const user = await db
+      .collection("users")
+      .findOne({ id }, { projection: { password: 0 } });
+
+    res.json(user);
+  } catch {
+    res.status(500).json({ error: "Database error" });
+  }
 });
 
-// Delete user
-router.delete("/:id", (req, res) => {
-  db.query("DELETE FROM users WHERE id=?", [req.params.id], (err) => {
-    if (err) return res.status(500).json({ error: "Database error" });
+router.delete("/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    const db = getDB();
+    await db.collection("users").deleteOne({ id });
     res.json({ success: true });
-  });
+  } catch {
+    res.status(500).json({ error: "Database error" });
+  }
 });
 
 export default router;

@@ -1,155 +1,119 @@
 import express from "express";
-import db from "../config/db.js";
+import { getDB } from "../config/db.js";
 import { verifyUser } from "../middleware/authMiddleware.js";
 import { getUserOrders } from "../controllers/ordersControlles.js";
 
 const router = express.Router();
+
 router.get("/user/:userId", getUserOrders);
 
-router.get("/", (req, res) => {
-  db.query(
-    `SELECT 
-      id, 
-      created_at, 
-      shipping_name, 
-      payment, 
-      total, 
-      shipping_address, 
-      shipping_city, 
-      shipping_pincode,
-      shipping_phone,
-      items, 
-      status,
-      user_id
-    FROM orders 
-    ORDER BY created_at DESC`,
-    (err, results) => {
-      if (err) {
-        console.error("Database error:", err);
-        return res.status(500).json({ error: `database error ${err}` });
-      }
+router.get("/", async (req, res) => {
+  try {
+    const db = getDB();
+    const orders = await db
+      .collection("orders")
+      .find({})
+      .sort({ created_at: -1 })
+      .toArray();
 
-      res.json(results);
-    }
-  );
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: `database error ${err}` });
+  }
 });
 
 router.get("/recent", async (req, res) => {
-  const days = req.query.days || 7;
+  const days = Number(req.query.days) || 7;
   try {
-    // ✅ use db.promise().query() instead of db.query()
-    const [rows] = await db.promise().query(
-      `SELECT * FROM orders 
-       WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-       ORDER BY created_at DESC`,
-      [days]
-    );
-    res.json(rows);
-  } catch (error) {
-    console.error("Error fetching recent orders:", error);
+    const db = getDB();
+    const fromDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const orders = await db
+      .collection("orders")
+      .find({ created_at: { $gte: fromDate } })
+      .sort({ created_at: -1 })
+      .toArray();
+
+    res.json(orders);
+  } catch {
     res.status(500).json({ error: "Failed to fetch recent orders" });
   }
 });
 
+router.get("/:id", async (req, res) => {
+  const orderId = Number(req.params.id);
+  if (!orderId) return res.status(400).json({ error: "Valid order ID is required" });
 
+  try {
+    const db = getDB();
+    const order = await db.collection("orders").findOne({ id: orderId });
 
-router.get("/:id", (req, res) => {
-  const orderId = req.params.id;
-
-  if (!orderId || isNaN(orderId)) {
-    return res.status(400).json({ error: "Valid order ID is required" });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    res.json(order);
+  } catch {
+    res.status(500).json({ error: "Database error" });
   }
-
-  db.query(
-    `SELECT 
-      id, 
-      created_at, 
-      shipping_name, 
-      payment, 
-      total, 
-      shipping_address, 
-      shipping_city, 
-      shipping_pincode,
-      shipping_phone,
-      items, 
-      status,
-      user_id
-    FROM orders WHERE id = ?`,
-    [orderId],
-    (err, results) => {
-      if (err) {
-        console.error("Database error:", err);
-        return res.status(500).json({ error: "Database error" });
-      }
-
-      if (results.length === 0) {
-        return res.status(404).json({ error: "Order not found" });
-      }
-
-      res.json(results[0]);
-    }
-  );
 });
 
-
-// ✅ Update order status //
-router.put("/:id/status", (req, res) => {
-  const { id } = req.params;
+router.put("/:id/status", async (req, res) => {
   const { status } = req.body;
+  const id = Number(req.params.id);
+  if (!status) return res.status(400).json({ error: "status is required" });
 
-  if (!status) {
-    return res.status(400).json({ error: "status is required" });
-  }
+  try {
+    const db = getDB();
+    const result = await db
+      .collection("orders")
+      .updateOne({ id }, { $set: { status } });
 
-  const query = "UPDATE orders SET status = ? WHERE id = ?"
-  db.query(query, [status, id], (err, result) => {
-    if (err) {
-      console.error("Database error:", err);
-      return res.status(500).json({ error: "Database error" });
-    }
-
-    if (result.affectedRows === 0) {
+    if (result.matchedCount === 0)
       return res.status(404).json({ error: "Order not found" });
-    }
 
     res.json({ message: "Order status updated successfully" });
-  });
+  } catch {
+    res.status(500).json({ error: "Database error" });
+  }
 });
 
-// ✅ Place new order
-router.post("/", verifyUser, (req, res) => {
-  const userId = req.user.id; // 👈 token se logged-in user id
+router.post("/", verifyUser, async (req, res) => {
+  const userId = req.user.id;
   const { items, total, shipping, payment } = req.body;
 
   if (!items || !total || !shipping || !payment) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
-  const query = `
-    INSERT INTO orders 
-    (user_id, items, total, shipping_name, shipping_address, shipping_city, shipping_pincode, shipping_phone, payment)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `;
+  try {
+    const db = getDB();
 
-  db.query(
-    query,
-    [
-      userId,                   // ✅ token-based id
-      JSON.stringify(items),
+    const lastOrder = await db
+      .collection("orders")
+      .find()
+      .sort({ id: -1 })
+      .limit(1)
+      .toArray();
+
+    const newId = lastOrder.length ? lastOrder[0].id + 1 : 1;
+
+    await db.collection("orders").insertOne({
+      id: newId,
+      user_id: userId,
+      items,
       total,
-      shipping.name,
-      shipping.address,
-      shipping.city,
-      shipping.pincode,
-      shipping.phone,
-      payment
-    ],
-    (err, result) => {
-      if (err) return res.status(500).json({ message: "Failed to place order" });
-      res.json({ success: true, orderId: result.insertId });
-    }
-  );
-});
+      shipping_name: shipping.name,
+      shipping_address: shipping.address,
+      shipping_city: shipping.city,
+      shipping_pincode: shipping.pincode,
+      shipping_phone: shipping.phone,
+      payment,
+      status: "pending",
+      created_at: new Date()
+    });
 
+    res.json({ success: true, orderId: newId });
+  } catch {
+    res.status(500).json({ message: "Failed to place order" });
+  }
+});
 
 export default router;

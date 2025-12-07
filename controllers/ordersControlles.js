@@ -1,15 +1,18 @@
-import db from "../config/db.js";
+import { getDB } from "../config/db.js";
 
 export const getUserOrders = async (req, res) => {
   const userId = parseInt(req.params.userId, 10);
 
   try {
-    const [rows] = await db.promise().query(
-      "SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC",
-      [userId]
-    );
+    const db = getDB();
 
-    res.json(rows);
+    const orders = await db
+      .collection("orders")
+      .find({ user_id: userId })
+      .sort({ created_at: -1 })
+      .toArray();
+
+    res.json(orders);
   } catch (error) {
     console.error("Error fetching user orders:", error);
     res.status(500).json({ error: "Database error" });
